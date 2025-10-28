@@ -4,6 +4,13 @@ library(RODBC)
 library(magrittr)
 library(dplyr)
 library(EML)
+library(ggplot2)
+library(tidyr)
+library(rstan)
+options(mc.cores = parallel::detectCores())
+rstan::rstan_options(auto_write = TRUE)
+
+theme_set(theme_minimal())
 
 ## check that an ignore folder exists
 if(!file.exists(here('ignore'))){
@@ -21,5 +28,5 @@ if(!any(grepl("ignore/",readLines(here(".gitignore"))))){
   print("Warning: `ignore` is not set to be ignored in .gitignore. Set this by adding 'ignore/' to the .gitignore file.")
 }
 
-db <- odbcConnectAccess2007(here("ignore/Nearshore Survey.accdb"))
+conn <- odbcConnectAccess2007(here("ignore/Nearshore Survey.accdb"))
 # sqlTables(db)
