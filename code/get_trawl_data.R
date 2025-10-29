@@ -23,7 +23,11 @@ get_trawl_data(conn = NULL){
     mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
     select(cno, towdate, station, spn, tlength, flength, weight)
   
-  towTab <- sqlFetch(conn, '')
+  towTab <- sqlFetch(conn, 'Tow') %>% 
+    #make all lowercase
+    rename_with(tolower) %>% 
+    mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
+    select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme)
   
   #write the eml file to export 
   # jim <- list(individualName = list(givenName = 'James', surName = 'Junker'))
