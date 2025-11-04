@@ -54,17 +54,17 @@ Once the database is correctly stored locally, access to the database is managed
 The connection to the database is set using
 
 ```{r db-conn, echo = TRUE, eval=FALSE}
-db <- odbcConnectAccess2007(here("ignore/Nearshore Survey.accdb"))
+conn <- odbcConnectAccess2007(here("ignore/Nearshore Survey.accdb"))
 ```
 
 and all the available database tables with
 
 ```{r db-tables, echo = TRUE, eval=FALSE}
-sqlTables(db)
+sqlTables(conn)
 ```
 
 ```{r db-tables-view, echo=FALSE}
-head(sqlTables(db),5) %>% dplyr::select(TABLE_NAME, TABLE_TYPE)
+head(sqlTables(conn),5) %>% dplyr::select(TABLE_NAME, TABLE_TYPE)
 ```
 
 ### Environmental variables from the Copernicus Marine Service
