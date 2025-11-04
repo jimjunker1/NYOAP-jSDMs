@@ -21,13 +21,21 @@ get_trawl_data(conn = NULL){
     # make all names lowercase
     rename_with(tolower) %>% 
     mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    select(cno, towdate, station, spn, tlength, flength, weight)
+    select(cno, towdate, station, spn, tlength, flength, weight) %>% 
+    # filter out 'Rod & Reel'
+    dplyr::filter(station != 'Rod & Reel')
   
   towTab <- sqlFetch(conn, 'Tow') %>% 
     #make all lowercase
     rename_with(tolower) %>% 
     mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
     select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme)
+  
+  # merge test
+  bioTab$cno[bioTab$cno %ni% towTab$cno]
+  bioTab$station[bioTab$station %ni% towTab$station]
+  bioTab$towdate[bioTab$towdate %ni% towTab$towdate]
+  bioTowTab <- merge(bioTab, towTab, by = c("cno","station","towdate"))
   
   #write the eml file to export 
   # jim <- list(individualName = list(givenName = 'James', surName = 'Junker'))
