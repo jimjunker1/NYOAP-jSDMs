@@ -28,8 +28,22 @@ get_trawl_data(conn = NULL){
   towTab <- sqlFetch(conn, 'Tow') %>% 
     #make all lowercase
     rename_with(tolower) %>% 
-    mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme)
+    dplyr::mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
+    dplyr::select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme) 
+  
+  #data checks for bad coords
+  # if()
+  latmsBad = any(na.omit(unlist(towTab$latms)) > 60)
+  latmeBad = any(na.omit(unlist(towTab$latme)) > 60)
+  lonmsBad = any(na.omit(unlist(towTab$lonms)) > 60)
+  lonmeBad = any(na.omit(unlist(towTab$lonme)) > 60)
+  
+  
+  %>% 
+    mutate(latStart_dd = latds+(latms/60),
+           lonStart_dd = londs+(lonms/60),
+           latEnd_dd = latde+(latme/60),
+           lonEnd_dd = londe+(lonme/60))
   
   # merge test
   bioTab$cno[bioTab$cno %ni% towTab$cno]

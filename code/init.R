@@ -10,6 +10,7 @@ library(rstan)
 library(reticulate)
 library(copernicusR)
 library(terra)
+library(geosphere)
 
 '%ni%' <- Negate('%in%')
 options(mc.cores = parallel::detectCores())

@@ -141,6 +141,8 @@ current (Global Ocean Physics Analysis and Forecast:
 GLOBAL_ANALYSISFORECAST_PHY_001_024). These were initially combined by
 downloading and summarising the data for the study area:
 
+<details>
+
 ``` r
 # download the re-analysis data product for before 2022-06-01
 # this is monthly mean sst
@@ -161,7 +163,7 @@ sstHindDate = as.Date(as.POSIXct(sstHind@ptr[["time"]], format = "%Y-%m-%d %H:%M
 # extract the area mean temperature. na.rm must be TRUE because land area in the study box
 sstHindMean = terra::global(sstHind, 'mean', na.rm = TRUE)
 sstHindDf = data.frame(date = sstHindDate,
-                       sst = sstHindMean)
+                       sst = unlist(sstHindMean))
 # download the data product for 
 sstPath = copernicus_download(
   dataset_id = "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1M-m",
@@ -180,14 +182,16 @@ sstDate = as.Date(as.POSIXct(sstRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"
 # extract the area mean temperature. na.rm must be TRUE because land area in the study box
 sstMean = terra::global(sstRast, 'mean', na.rm = TRUE)
 sstDf = data.frame(date = sstDate,
-                   sst = sstMean)
+                   sst = unlist(sstMean))
 
 sstDf = bind_rows(sstHindDf, sstDf) %>%
   data.frame %>% 
-  dplyr::summarise(sst = mean(mean), .by = 'date')
+  dplyr::summarise(sst = mean(sst), .by = 'date')
 
 saveRDS(sstDf, here('data/sst.rds'))
 ```
+
+</details>
 
 This data currently covers 1-month past the final trawl data of
 2024-08-14 (i.e., 2024-09-14). For the purposes of this initial
@@ -208,3 +212,54 @@ sst %>%
 ```
 
 ![](README_files/figure-gfm/temp-forecast-ex-1.png)<!-- -->
+
+Chlorophyll-a
+
+<details>
+
+``` r
+# download the re-analysis data product for before 2022-06-01
+# this is monthly mean sst
+chlHindPath = copernicus_download(
+  dataset_id = "cmems_mod_glo_bgc_my_0.25deg_P1M-m",
+  dataset_version = "202406",
+  variables = "chl",
+  start_date = bioHindStart,
+  end_date = bioEnd,
+  bbox = NYSbbox,
+  depth = c(0.5057600140571594,1.5558550357818604), # 0.5m to 1m depth
+  output_file = here("data/chla.nc")
+  )
+# turn this into a raster object
+chlRast = terra::rast(chlHindPath)
+# set the starting date for each observation
+chlDate = as.Date(as.POSIXct(chlRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"), format = "%Y-%m")
+# extract the area mean temperature. na.rm must be TRUE because land area in the study box
+chlMean = terra::global(chlRast, 'mean', na.rm = TRUE)
+chlDf = data.frame(date = chlDate,
+                       chl = unlist(chlMean))
+
+saveRDS(chlDf, here('data/chl.rds'))
+```
+
+</details>
+
+This data currently covers 1-month past the final trawl data of
+2024-08-14 (i.e., 2024-09-14). For the purposes of this initial
+exercise, we would treat this next month for forecasting purposes.
+
+``` r
+chl = readRDS(here('data/chl.rds')) %>% 
+  dplyr::mutate(future = ifelse(as.Date(date) <= as.Date("2024-08-14"), FALSE, TRUE))
+
+chl %>% 
+  ggplot()+
+  geom_point(aes(x = date, y = chl, color = future))+
+  geom_line(aes(x = date, y = chl, color = future))+
+  scale_color_manual(values = c('black','red'))+
+  scale_y_continuous(name = expression("Chlorophyll (mg"~m^-3~")"),
+                     limits = c(0,3))+
+  theme(legend.position = "none")
+```
+
+![](README_files/figure-gfm/chla-forecast-ex-1.png)<!-- -->
