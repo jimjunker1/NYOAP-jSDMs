@@ -4,3 +4,7 @@
 .Ruserdata
 
 ignore/
+
+.Rproj.user--old
+
+data/derived-data/models/

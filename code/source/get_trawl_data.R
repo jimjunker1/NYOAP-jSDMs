@@ -1,4 +1,4 @@
-here::i_am("code/get_trawl_data.R")
+here::i_am("code/source/get_trawl_data.R")
 #'  @title get_trawl_data()
 #'  @description
 #'  This function extracts and cleans the trawl data. With this function 
@@ -7,15 +7,16 @@ here::i_am("code/get_trawl_data.R")
 #'  3) metadata are connected to this data file and output as xml, and
 #'  4) a community matrix of biological data is created for further analysis
 #'  @param conn a database connection to the trawl Access database
+#'  @param update logical. Should the data procedure update for new data (TRUE) or upload saved object (FALSE)
 #'
-#'
-get_trawl_data(conn = NULL){
+
+get_trawl_data = function(conn = NULL, update = FALSE){
   # tests #
   ## check that the db connection is good
   if(!grepl("RODBC", class(conn))) stop("Error: `conn` must be a valid RODBC connection.")
   if(!grepl("Nearshore Survey.accdb", attr(conn, "connection.string"))) stop("Error: `conn` should point to the 'Nearshore Survey' database.")
   # end tests #
-  
+  if(update){
   #extract the Biological Samples table and clean columns
   bioTab <- sqlFetch(conn, 'Biological Samples') %>% 
     # make all names lowercase
@@ -28,14 +29,41 @@ get_trawl_data(conn = NULL){
   towTab <- sqlFetch(conn, 'Tow') %>% 
     #make all lowercase
     rename_with(tolower) %>% 
-    mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme)
+    dplyr::mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
+    dplyr::select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme) 
+  
+  #data checks for bad coords
+  # if()
+  latmsBad = any(na.omit(unlist(towTab$latms)) > 60)
+  latmeBad = any(na.omit(unlist(towTab$latme)) > 60)
+  lonmsBad = any(na.omit(unlist(towTab$lonms)) > 60)
+  lonmeBad = any(na.omit(unlist(towTab$lonme)) > 60)
+  if(any(latmsBad,latmeBad,lonmsBad, lonmeBad)) warning("Warning: some tow coordinates are incorrect (i.e. greater than 60). They cannot be converted to decimal degrees.")
+  
+  towTab = towTab  %>% 
+    mutate(latStart_dd = latds+(latms/60),
+           lonStart_dd = londs+(lonms/60),
+           latEnd_dd = latde+(latme/60),
+           lonEnd_dd = londe+(lonme/60))
   
   # merge test
+  ## test for cruise numbers (cno) in bioTab but not towTab
   bioTab$cno[bioTab$cno %ni% towTab$cno]
+  if(length(bioTab$cno[bioTab$cno %ni% towTab$cno]) > 0) warning("Warning: There are cruises (cno) in bioTab not in towTab")
+  ## test for stations in bioTab but not towTab
   bioTab$station[bioTab$station %ni% towTab$station]
+  if(length(bioTab$station[bioTab$station %ni% towTab$station]) > 0 ) warning(paste0("Warning: There are stations in bioTab not present in towTab. \n Stations not in towTab are:",bioTab$station[bioTab$station %ni% towTab$station]))
+  ## test for towdates in bioTab but not towTab
   bioTab$towdate[bioTab$towdate %ni% towTab$towdate]
+  if(length(bioTab$towdate[bioTab$towdate %ni% towTab$towdate]) > 0 ) warning(paste0("Warning: There are towdates present in bioTab not in towTab. \n Dates not present in towTab are:",bioTab$towdate[bioTab$towdate %ni% towTab$towdate]))
+  ## merge the bio and tow tabs by cno, station, and towdate
   bioTowTab <- merge(bioTab, towTab, by = c("cno","station","towdate"))
+  saveRDS(bioTowTab, here('data/derived-data/bioTowTab.rds'))
+  }
+  bioTowTab = readRDS(here('data/derived-data/bioTowTab.rds'))
+   assign("bioTowTab", readRDS(here('data/derived-data/bioTowTab.rds')), envir = .GlobalEnv)
+   print("Trawl data imported")
+
   
   #write the eml file to export 
   # jim <- list(individualName = list(givenName = 'James', surName = 'Junker'))

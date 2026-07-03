@@ -84,6 +84,7 @@ remotes::install_github("HansTtito/copernicusR")
 
 # Load the package
 library(copernicusR)
+setup_copernicus()
 ```
 
 Follow the instructions on the [`copernicusR` page](https://github.com/HansTtito/copernicusR) to set up the credentials of your Copernicus account. It is recommended to follow the "Alternative Setup: Method 3" instructions to securely set environmental variables for your account username and password.
@@ -100,6 +101,8 @@ This should be used for all data downloads of regional environmental data.
 
 Sea surface temperature data is provided in two different products, one prior to 2022-06-01 (Global Ocean Physics Reanalysis: GLOBAL_MULTIYEAR_PHY_001_030), and the current forecast out 1-week from current (Global Ocean Physics Analysis and Forecast: GLOBAL_ANALYSISFORECAST_PHY_001_024). These were initially combined by downloading and summarising the data for the study area:
 
+<details>
+
 ```{r sstHind-dw, echo=TRUE, eval=FALSE}
 # download the re-analysis data product for before 2022-06-01
 # this is monthly mean sst
@@ -111,16 +114,16 @@ sstHindPath = copernicus_download(
   end_date = bioStart,
   bbox = NYSbbox,
   depth = c(0.49402499198913574,1), # 0.5m to 1m depth
-  output_file = here("data/sstHind.nc")
+  output_file = here("data/environmental/sstHind.nc")
   )
 # turn this into a raster object
 sstHindRast = terra::rast(sstHindPath)
 # set the starting date for each observation
-sstHindDate = as.Date(as.POSIXct(sstHind@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"), format = "%Y-%m")
+sstHindDate = as.Date(as.POSIXct(sstHindRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"), format = "%Y-%m")
 # extract the area mean temperature. na.rm must be TRUE because land area in the study box
-sstHindMean = terra::global(sstHind, 'mean', na.rm = TRUE)
+sstHindMean = terra::global(sstHindRast, 'mean', na.rm = TRUE)
 sstHindDf = data.frame(date = sstHindDate,
-                       sst = sstHindMean)
+                       sst = unlist(sstHindMean))
 # download the data product for 
 sstPath = copernicus_download(
   dataset_id = "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1M-m",
@@ -130,7 +133,7 @@ sstPath = copernicus_download(
   end_date = bioEnd,
   bbox = NYSbbox,
   depth = c(0.49402499198913574,1),# 0.5m to 1m depth
-  output_file = here("data/sstFore1.nc")
+  output_file = here("data/environmental/sstFore1.nc")
   )
 # set this as a raster object
 sstRast = terra::rast(sstPath)
@@ -139,20 +142,22 @@ sstDate = as.Date(as.POSIXct(sstRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"
 # extract the area mean temperature. na.rm must be TRUE because land area in the study box
 sstMean = terra::global(sstRast, 'mean', na.rm = TRUE)
 sstDf = data.frame(date = sstDate,
-                   sst = sstMean)
+                   sst = unlist(sstMean))
 
 sstDf = bind_rows(sstHindDf, sstDf) %>%
   data.frame %>% 
-  dplyr::summarise(sst = mean(mean), .by = 'date')
+  dplyr::summarise(sst = mean(sst), .by = 'date')
 
-saveRDS(sstDf, here('data/sst.rds'))
+saveRDS(sstDf, here('data/environmental/sst.rds'))
 
 ```
+
+</details>
 
 This data currently covers 1-month past the final trawl data of 2024-08-14 (i.e., 2024-09-14). For the purposes of this initial exercise, we would treat this next month for forecasting purposes.
 
 ```{r temp-forecast-ex, echo=TRUE, eval=TRUE}
-sst = readRDS(here('data/sst.rds')) %>% 
+sst = readRDS(here('data/environmental/sst.rds')) %>% 
   dplyr::mutate(future = ifelse(as.Date(date) <= as.Date("2024-08-14"), FALSE, TRUE))
 
 sst %>% 
@@ -165,3 +170,167 @@ sst %>%
   theme(legend.position = "none")
 
 ```
+
+Chlorophyll-a
+
+<details>
+
+```{r chlaHind-dw, echo=TRUE, eval=FALSE}
+# download the re-analysis data product for before 2022-06-01
+# this is monthly mean sst
+chlHindPath = copernicus_download(
+  dataset_id = "cmems_mod_glo_bgc_my_0.25deg_P1M-m",
+  dataset_version = "202406",
+  variables = "chl",
+  start_date = bioHindStart,
+  end_date = bioEnd,
+  bbox = NYSbbox,
+  depth = c(0.5057600140571594,1.5558550357818604), # 0.5m to 1m depth
+  output_file = here("data/environmental/chla.nc")
+  )
+# turn this into a raster object
+chlRast = terra::rast(chlHindPath)
+# set the starting date for each observation
+chlDate = as.Date(as.POSIXct(chlRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"), format = "%Y-%m")
+# extract the area mean temperature. na.rm must be TRUE because land area in the study box
+chlMean = terra::global(chlRast, 'mean', na.rm = TRUE)
+chlDf = data.frame(date = chlDate,
+                       chl = unlist(chlMean))
+
+saveRDS(chlDf, here('data/environmental/chl.rds'))
+
+```
+
+</details>
+
+This data currently covers 1-month past the final trawl data of 2024-08-14 (i.e., 2024-09-14). For the purposes of this initial exercise, we would treat this next month for forecasting purposes.
+
+```{r chla-forecast-ex, echo=TRUE, eval=TRUE}
+chl = readRDS(here('data/environmental/chl.rds')) %>% 
+  dplyr::mutate(future = ifelse(as.Date(date) <= as.Date("2024-08-14"), FALSE, TRUE))
+
+chl %>% 
+  ggplot()+
+  geom_point(aes(x = date, y = chl, color = future))+
+  geom_line(aes(x = date, y = chl, color = future))+
+  scale_color_manual(values = c('black','red'))+
+  scale_y_continuous(name = expression("Chlorophyll (mg"~m^-3~")"),
+                     limits = c(0,3))+
+  theme(legend.position = "none")
+
+```
+
+Low and Mid-trophic level data
+
+Copernicus also provides reanalysis of low and mid-trophic level biomass [here](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_BGC_001_033/download?dataset=cmems_mod_glo_bgc_my_0.083deg-lmtl_P1D-i_202511).
+
+<details>
+
+```{r lmtl-forecast-ex, echo = TRUE, eval = FALSE}
+
+lmtlHindCast = copernicus_download(
+  dataset_id = "cmems_mod_glo_bgc_my_0.083deg-lmtl_P1D-i",
+  dataset_version = "202511",
+  variables = c("zooc","npp","mnkc_epi"),
+  start_date = bioHindStart,
+  end_date = bioEnd,
+  bbox = NYSbbox,
+  depth = c(0.5057600140571594,1.5558550357818604), # 0.5m to 1m depth
+  output_file = here("data/environmental/lmtl.nc")
+  )
+
+# turn this into a raster object
+lmtlRast = terra::rast(lmtlHindCast)
+# set the starting date for each observation
+lmtlDate = as.Date(as.POSIXct(lmtlRast@ptr[["time"]], format = "%Y-%m-%d %H:%M:%S"), format = "%Y-%m")
+# extract the area mean temperature. na.rm must be TRUE because land area in the study box
+lmtlMean = terra::global(lmtlRast, 'mean', na.rm = TRUE)
+lmtlDf = data.frame(date = lmtlDate,
+                       lmtl = unlist(lmtlMean))
+
+saveRDS(lmtlDf, here('data/environmental/lmtl.rds'))
+
+```
+
+</details>
+
+This data currently covers 1-month past the final trawl data of 2024-08-14 (i.e., 2024-09-14). For the purposes of this initial exercise, we would treat this next month for forecasting purposes.
+
+```{r chla-forecast-ex, echo=TRUE, eval=TRUE}
+lmtl = readRDS(here('data/environmental/lmtl.rds')) %>% 
+  dplyr::mutate(future = ifelse(as.Date(date) <= as.Date("2024-08-14"), FALSE, TRUE))
+
+lmtl %>% 
+  ggplot()+
+  geom_point(aes(x = date, y = lmtl, color = future))+
+  geom_line(aes(x = date, y = lmtl, color = future))+
+  scale_color_manual(values = c('black','red'))+
+  scale_y_continuous(name = expression("Low & Middle-trophic Level biomass (g"~m^-2~")"),
+                     limits = c(0,NA))+
+  theme(legend.position = "none")
+
+```
+
+AMO
+
+The Atlantic multidecadal oscillation SST monthly index can be downloaded from [NOAA/NCEI](https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.amo.dat). This is 
+
+```{r AMO-monthly, echo = TRUE, eval = FALSE}
+
+amo_url = "https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.amo.dat"
+
+amo = read.table(amo_url, skip = 1, header = TRUE) %>% 
+  rename_with(tolower, everything()) %>% 
+  dplyr::filter(year >= lubridate::year(as.POSIXct(bioHindStart))) %>% 
+  mutate(date = as.Date(paste0(year,"-",month,"-01"), format = "%Y-%m-%d"))
+
+saveRDS(amo, here('data/environmental/amo.rds'))
+```
+
+```{r amo-plot, eval=TRUE, echo = TRUE}
+readRDS(here('data/environmental/amo.rds')) %>% 
+  ggplot()+
+  geom_point(aes(x = date, y = ssta))+
+  geom_line(aes(x = date, y = ssta))+
+  scale_y_continuous(name = 'Atlantic Multi-decadel Oscillation (AMO) Index', limits = c(0,NA))+
+  scale_x_date(name ='Date')
+
+```
+
+NAO
+
+The monthly values can be accessed via [NCEP](https://www.cpc.ncep.noaa.gov/products/precip/CWlink/pna/norm.nao.monthly.b5001.current.ascii).  
+
+```{r NAO-monthly, eval = FALSE, echo = TRUE}
+
+nao_url = "https://www.cpc.ncep.noaa.gov/products/precip/CWlink/pna/norm.nao.monthly.b5001.current.ascii"
+
+nao = read.table(nao_url) %>% 
+  setNames(nm = c('year','month','nao')) %>% 
+  rename_with(tolower, everything()) %>% 
+  dplyr::filter(year >= lubridate::year(as.POSIXct(bioHindStart))) %>% 
+  mutate(date = as.Date(paste0(year,"-",month,"-01"), format = "%Y-%m-%d"))
+
+saveRDS(nao, here('data/environmental/nao.rds'))
+```
+
+```{r nao-plot}
+readRDS(here('data/environmental/nao.rds')) %>% 
+  ggplot()+
+  geom_point(aes(x = date, y = nao))+
+  geom_line(aes(x = date, y = nao))+
+  scale_y_continuous(name = 'North Atlantic Oscillation (NAO) Index', limits = c(NA,NA))+
+  scale_x_date(name ='Date')
+
+```
+
+However, We can also estimate the NAO using NOAA GFS products. Specifically, we can estimate the NAO index based on the north-south pressure-height contrast in the north Atlantic and correcting this to the the 1981-2010 climatology average for each day, as:
+
+$$NAO = \frac{(Z500_{35N-45N, 70W-10W} - Z500_{55N-70N,70W-10W}) - climatology_{mean}}{climatology_{SD}}$$
+
+This allows us to use the forecast, and their variability, in forecasting.
+
+
+
+
+## time lags
