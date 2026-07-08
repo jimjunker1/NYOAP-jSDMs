@@ -30,7 +30,7 @@ get_trawl_data = function(conn = NULL, update = FALSE){
     #make all lowercase
     rename_with(tolower) %>% 
     dplyr::mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    dplyr::select(cno, towdate, station, latds, latms, londs, lonms, latde, latme, londe, lonme) 
+    dplyr::select(cno, towdate, station, tow, latds, latms, londs, lonms, latde, latme, londe, lonme) 
   
   #data checks for bad coords
   # if()
@@ -45,6 +45,34 @@ get_trawl_data = function(conn = NULL, update = FALSE){
            lonStart_dd = londs+(lonms/60),
            latEnd_dd = latde+(latme/60),
            lonEnd_dd = londe+(lonme/60))
+  
+  ctdTab <- sqlFetch(conn, 'CTD') %>% 
+    # make all lower case
+    rename_with(tolower, everything()) %>% 
+    dplyr::select(cno = 'cruise #',
+                  station = 'station #',
+                  towID = 'tow #',
+                  towDate = 'date ',
+                  towTime = 'time',
+                  duration = 'tow duration (min)',
+                  latStart_dd = 'start lat dd',
+                  lonStart_dd = 'start long dd',
+                  latEnd_dd = 'end lat dd',
+                  lonEnd_dd = 'end long dd',
+                  ctd_depth_m = 'depth (ctd, m)',
+                  temp_c = 'temp (°c)',
+                  sal_psu = 'salinity (psu)',
+                  do_mgL = 'do (mg/l)',
+                  ph) %>% 
+    dplyr::mutate(towTime = as.character(towTime)) %>% 
+    dplyr::mutate(towDate = as.Date(towDate, format = '%Y-%m-%d'),
+                  towTime = gsub("\\d{4}-\\d{2}-\\d{2}\\s(\\d{2}:\\d{2}:\\d{2}$)","\\1",towTime),
+                  towDateTime = as.POSIXct(paste(towDate,towTime, sep = " "), format = "%Y-%m-%d %H:%M:%S")) %>% 
+    dplyr::select(-towTime) %>% 
+    rowwise %>% 
+    dplyr::mutate(trawlDist = geosphere::distm(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd), fun = distHaversine)[,1])
+  
+  ## tow and ctd merge test
   
   # merge test
   ## test for cruise numbers (cno) in bioTab but not towTab

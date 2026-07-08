@@ -287,7 +287,7 @@ run_nao_forecast_windows <- function(
     cycle = "00",
     include_init = FALSE,
     save_dir = here("data/gfs"),
-    clim_cache = here("data/nao_psl_climatology_1981_2010.csv"),
+    clim_cache = here("data/environmental/nao_psl_climatology_1981_2010.csv"),
     out_dir = here("data/gfs/outputs")) {
   
   py_windows <- purrr::transpose(windows)

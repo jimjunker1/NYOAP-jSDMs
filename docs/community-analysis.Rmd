@@ -124,7 +124,12 @@ spNames %>% walk(~build_LM(specName = ., df = bioTowTab))
 ```
 
 ```{r plot length-mass-PPC, fig_collapse = TRUE}
-lmFiles = list.files(here('data/derived-data/models/'), pattern = '.*LM_censored.rds', full.names = TRUE)
+lmFiles = list.files(here('ignore/models/'), pattern = '.*LM_censored.rds', full.names = TRUE)
+
+lmNames = gsub(".*(/\\w+( \\w+)*_LM_censored)\\.rds","\\1", lmFiles) %>% 
+  map_chr(~gsub("/(\\w+( \\w+)*)_LM_censored","\\1", .x))
+
+lmFiles= setNames(lmFiles, nm = lmNames)
 
 # debugonce(plot_LM_PPC)
 map2(lmFiles, spnLWList, ~plot_LM_PPC(model_path = .x, df = .y))
@@ -133,7 +138,9 @@ map2(lmFiles, spnLWList, ~plot_LM_PPC(model_path = .x, df = .y))
 
 ## Collecting environmental variables
 
-Here are the sampling dates from the trawl data. We h
+Here are the sampling dates from the trawl data.
+
+<details>
 
 ```{r trawl-date-info}
 
@@ -144,6 +151,12 @@ bioTowTab %>%
   knitr::kable(.)
 ```
 
+</details>
+
+For each of these sampling dates we can extract the environmental data collected during the sampling.
+
 ```{r }
+
+sqlTables(conn)
 
 ```
