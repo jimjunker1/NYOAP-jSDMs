@@ -132,6 +132,30 @@ following coordinates:
 NYSbbox = c(-74.262999, -71.389711, 39.803091, 41.431287)
 ```
 
+``` r
+bathPath = here("data/environmental/gebco_2026_n41.4_s39.8_w-74.3_e-71.4.nc")
+# turn this into a raster object
+bathRast = terra::rast(bathPath)
+bathDf = as.data.frame(bathRast, xy = TRUE)
+bathVars = names(bathDf)[3]
+threshold = 0
+ggplot()+
+  geom_raster(data = bathDf,aes(x = x, y = y, fill = ifelse(.data[[bathVars]] > threshold, NA, .data[[bathVars]])), alpha = 1)+
+  annotation_borders('world',
+                     xlim = c(NYSbbox[1],NYSbbox[2]),
+                     ylim = c(NYSbbox[3], NYSbbox[4]),
+                     fill = 'grey')+
+  annotate(geom = 'rect', xmin = NYSbbox[1], xmax = NYSbbox[2],
+                    ymin = NYSbbox[3], ymax = NYSbbox[4], fill = NA, color = 'black')+
+  coord_sf(crs = 4326,
+           xlim = c(NYSbbox[1],NYSbbox[2]),
+           ylim = c(NYSbbox[3], NYSbbox[4]))+
+  labs(title = "NYS study region", x = 'Longitude', y = 'Latitude')+
+  theme(legend.position = 'none')
+```
+
+![](README_files/figure-gfm/nys-bb-bathymetry-1.png)<!-- -->
+
 This should be used for all data downloads of regional environmental
 data.
 

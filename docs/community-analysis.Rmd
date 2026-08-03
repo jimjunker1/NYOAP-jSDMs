@@ -1,5 +1,5 @@
 ---
-title: "community-analysis"
+title: "Community Analysis"
 output: 
   html_document:
     toc: true
@@ -145,7 +145,7 @@ Here are the sampling dates from the trawl data.
 ```{r trawl-date-info}
 
 bioTowTab %>% 
-  mutate(towmonth = as.Date(paste0(lubridate::year(towdate),"-",lubridate::month(towdate),"-01"), format = "%Y-%m-%d")) %>%
+  mutate(towmonth = as.Date(paste0(lubridate::year(towDate),"-",lubridate::month(towDate),"-01"), format = "%Y-%m-%d")) %>%
   select(towmonth) %>% 
   distinct %>% 
   knitr::kable(.)
@@ -153,10 +153,79 @@ bioTowTab %>%
 
 </details>
 
-For each of these sampling dates we can extract the environmental data collected during the sampling.
+We can also view the spatial extent of the trawl data to confirm that they are within the bounds of the environmental variables.
 
-```{r }
+```{r trawl-lines}
+# create a metadata with the start and end of each tow
+bioTowMeta = bioTowTab %>% 
+  select(cno, towDate, station, towID, latStart_dd,lonStart_dd,latEnd_dd,lonEnd_dd) %>% 
+  distinct() %>% 
+  dplyr::mutate(id = 1:n())
 
-sqlTables(conn)
+bathPath = here("data/environmental/gebco_2026_n41.4_s39.8_w-74.3_e-71.4.nc")
+# turn this into a raster object
+bathRast = terra::rast(bathPath)
+bathDf = as.data.frame(bathRast, xy = TRUE)
+bathVars = names(bathDf)[3]
+threshold = 0
+
+ggplot()+
+  geom_raster(data = bathDf,aes(x = x, y = y, fill = ifelse(.data[[bathVars]] > threshold, NA, .data[[bathVars]])), alpha = 1)+
+  annotation_borders('world',
+                     xlim = c(NYSbbox[1],NYSbbox[2]),
+                     ylim = c(NYSbbox[3], NYSbbox[4]),
+                     fill = 'grey')+
+  annotate(geom = 'rect', xmin = NYSbbox[1], xmax = NYSbbox[2],
+                    ymin = NYSbbox[3], ymax = NYSbbox[4], fill = NA, color = 'black')+
+  coord_sf(crs = 4326,
+           xlim = c(NYSbbox[1],NYSbbox[2]),
+           ylim = c(NYSbbox[3], NYSbbox[4]))+
+  # geom_point(data = bioTowTab, aes(x = lonStart_dd, latStart_dd))+
+  geom_segment(data = bioTowMeta, aes(x = lonStart_dd, y = latStart_dd, xend = lonEnd_dd, yend = latEnd_dd, group = id))+
+  labs(title = "NYS study region", x = 'Longitude', y = 'Latitude')+
+  theme(legend.position = 'none')
+```
+
+For each of these sampling dates we can extract the environmental data from the collected during the sampling.
+
+```{r get-env}
+bioTowMonth = bioTowTab %>% 
+  mutate(towmonth = as.Date(paste0(lubridate::year(towDate),"-",lubridate::month(towDate),"-01"), format = "%Y-%m-%d")) %>%
+  select(towmonth) %>% 
+  distinct %>%
+  # join regional sst
+  left_join(., readRDS(here('data/environmental/sst.rds')) %>% rename(towmonth = date)) %>% 
+  # join regional chla
+  left_join(., readRDS(here('data/environmental/chl.rds')) %>% rename(towmonth = date)) %>% 
+  # join the regional zoo
+  left_join(., readRDS(here('data/environmental/zooc.rds')) %>% rename(towmonth = date)) %>% 
+  # join the NAO
+  left_join(., readRDS(here('data/environmental/nao.rds')) %>% select(towmonth = date, nao)) %>% 
+  # join the AMO 
+  left_join(., readRDS(here('data/environmental/amo.rds')) %>% select(towmonth = date, amo = ssta), by = 'towmonth')
+
+## extract the depths for start and end from bathymetry data
+
+bioTowStart = vect(bioTowMeta, geom = c('lonStart_dd','latStart_dd'))
+bioTowEnd = vect(bioTowMeta, geom = c('lonEnd_dd','latEnd_dd'))
+bioTowMeta$startDepth_m = unlist(terra::extract(bathRast, y = bioTowStart)['elevation'])
+bioTowMeta$endDepth_m = unlist(terra::extract(bathRast, y = bioTowEnd)['elevation'])
+
+bioTowMeta = bioTowMeta %>% 
+  select(id, cno, towDate, station, towID, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd, startDepth_m, endDepth_m) %>% 
+  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2)
+```
+
+## Prepare data for modeling
+
+```{r merge-all-data}
+bioEnv = bioTowMonth
+    
+bioData = bioTowTab %>% 
+  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate), "-01"), format = "%Y-%m-%d")) %>%
+  dplyr::summarise(abun = n(),
+                   biomass = sum(weight),.by = c(towmonth, spn, trawlDist_m))
 
 ```
+
+

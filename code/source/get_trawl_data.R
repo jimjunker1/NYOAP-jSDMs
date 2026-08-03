@@ -21,16 +21,16 @@ get_trawl_data = function(conn = NULL, update = FALSE){
   bioTab <- sqlFetch(conn, 'Biological Samples') %>% 
     # make all names lowercase
     rename_with(tolower) %>% 
-    mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    select(cno, towdate, station, spn, tlength, flength, weight) %>% 
+    mutate(towDate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
+    select(cno, towDate, station, spn, tlength, flength, weight) %>% 
     # filter out 'Rod & Reel'
     dplyr::filter(station != 'Rod & Reel')
   
   towTab <- sqlFetch(conn, 'Tow') %>% 
     #make all lowercase
     rename_with(tolower) %>% 
-    dplyr::mutate(towdate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
-    dplyr::select(cno, towdate, station, tow, latds, latms, londs, lonms, latde, latme, londe, lonme) 
+    dplyr::mutate(towDate = as.Date(towdate, format = "%Y-%m-%d")) %>% 
+    dplyr::select(cno, towDate, station, towID = tow, latds, latms, londs, lonms, latde, latme, londe, lonme) 
   
   #data checks for bad coords
   # if()
@@ -41,10 +41,20 @@ get_trawl_data = function(conn = NULL, update = FALSE){
   if(any(latmsBad,latmeBad,lonmsBad, lonmeBad)) warning("Warning: some tow coordinates are incorrect (i.e. greater than 60). They cannot be converted to decimal degrees.")
   
   towTab = towTab  %>% 
-    mutate(latStart_dd = latds+(latms/60),
-           lonStart_dd = londs+(lonms/60),
-           latEnd_dd = latde+(latme/60),
-           lonEnd_dd = londe+(lonme/60))
+    dplyr::mutate(bad_coords_tow = case_when(
+      is.na(latms) | is.na(latme) | is.na(lonms) | is.na(lonme) |
+      latms > 60 |
+      latme > 60 |
+      lonms > 60 |
+      lonme > 60 ~ TRUE,
+    .default = FALSE)) %>% 
+    dplyr::mutate(latStart_dd_tow = latds+(latms/60),
+           lonStart_dd_tow = londs+(lonms/60),
+           latEnd_dd_tow = latde+(latme/60),
+           lonEnd_dd_tow = londe+(lonme/60)) %>% 
+    rowwise %>% 
+    dplyr::mutate(trawlDist_tow = geosphere::distm(c(lonStart_dd_tow,latStart_dd_tow), c(lonEnd_dd_tow, latEnd_dd_tow), fun = distHaversine)[,1])
+  
   
   ctdTab <- sqlFetch(conn, 'CTD') %>% 
     # make all lower case
@@ -55,10 +65,10 @@ get_trawl_data = function(conn = NULL, update = FALSE){
                   towDate = 'date ',
                   towTime = 'time',
                   duration = 'tow duration (min)',
-                  latStart_dd = 'start lat dd',
-                  lonStart_dd = 'start long dd',
-                  latEnd_dd = 'end lat dd',
-                  lonEnd_dd = 'end long dd',
+                  latStart_dd_ctd = 'start lat dd',
+                  lonStart_dd_ctd = 'start long dd',
+                  latEnd_dd_ctd = 'end lat dd',
+                  lonEnd_dd_ctd = 'end long dd',
                   ctd_depth_m = 'depth (ctd, m)',
                   temp_c = 'temp (°c)',
                   sal_psu = 'salinity (psu)',
@@ -70,22 +80,76 @@ get_trawl_data = function(conn = NULL, update = FALSE){
                   towDateTime = as.POSIXct(paste(towDate,towTime, sep = " "), format = "%Y-%m-%d %H:%M:%S")) %>% 
     dplyr::select(-towTime) %>% 
     rowwise %>% 
-    dplyr::mutate(trawlDist = geosphere::distm(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd), fun = distHaversine)[,1])
+    dplyr::mutate(trawlDist_ctd = geosphere::distm(c(lonStart_dd_ctd,latStart_dd_ctd), c(lonEnd_dd_ctd, latEnd_dd_ctd), fun = distHaversine)[,1])
   
   ## tow and ctd merge test
+  towEnvTab = merge(towTab, ctdTab, by = c('cno','station','towID','towDate'), all = TRUE) %>% 
+    dplyr::mutate(dist_agree = case_when(round(trawlDist_tow,4) == round(trawlDist_ctd,4) ~TRUE,
+                                        .default = FALSE),
+                  coords_agree = case_when(latStart_dd_tow == latStart_dd_ctd &
+                                             lonStart_dd_tow == lonStart_dd_ctd &
+                                             latEnd_dd_tow == latEnd_dd_ctd &
+                                             lonEnd_dd_tow == lonEnd_dd_ctd ~ TRUE,
+                                           .default = FALSE)) %>% 
+    dplyr::select(-latds,-latms,-londs,-lonms,-latde, -latme, -londe,-lonme) %>% 
+    dplyr::select(cno, station, towID, towDate, duration, latStart_dd_tow,latStart_dd_ctd, lonStart_dd_tow,lonStart_dd_ctd,
+                  latEnd_dd_tow,latEnd_dd_ctd, lonEnd_dd_tow,lonEnd_dd_ctd, bad_coords_tow,coords_agree, dist_agree, trawlDist_tow, trawlDist_ctd, everything() ) %>% 
+    dplyr::mutate(trawlDist_tow = case_when(trawlDist_tow > 6000 ~ NA_real_,
+                                            trawlDist_tow == 0 ~ NA_real_,
+                                            .default = trawlDist_tow),
+                  trawlDist_ctd = case_when(trawlDist_ctd > 6000 ~ NA_real_,
+                                            trawlDist_ctd == 0 ~ NA_real_,
+                                            .default = trawlDist_ctd)) %>% 
+    dplyr::mutate(across(matches("\\w+_dd_tow"), ~if_else(bad_coords_tow == TRUE, NA_real_, .x))) %>% 
+    dplyr::mutate(latStart_dd = case_when(bad_coords_tow ~ latStart_dd_ctd,
+                                         dist_agree & is.na(latStart_dd_ctd) & !is.na(latStart_dd_tow) ~ latStart_dd_tow,
+                                         is.na(latStart_dd_ctd) & !is.na(latStart_dd_tow) ~ latStart_dd_tow,
+                                         is.na(trawlDist_ctd) & !is.na(latStart_dd_ctd) ~ latStart_dd_tow,
+                                         dist_agree & !is.na(latStart_dd_ctd) ~ latStart_dd_ctd,
+                                         is.na(trawlDist_tow) & !is.na(latStart_dd_ctd) ~ latStart_dd_ctd,
+                                         .default = NA_real_),
+                  lonStart_dd = case_when(bad_coords_tow ~ lonStart_dd_ctd,
+                                          dist_agree & is.na(lonStart_dd_ctd) & !is.na(lonStart_dd_tow) ~ lonStart_dd_tow,
+                                          is.na(lonStart_dd_ctd) & !is.na(lonStart_dd_tow) ~ lonStart_dd_tow,
+                                          is.na(trawlDist_ctd) & !is.na(lonStart_dd_ctd) ~ lonStart_dd_tow,
+                                          dist_agree & !is.na(lonStart_dd_ctd) ~ lonStart_dd_ctd,
+                                          is.na(trawlDist_tow) & !is.na(lonStart_dd_ctd) ~ lonStart_dd_ctd,
+                                          .default = NA_real_),
+                  latEnd_dd = case_when(bad_coords_tow ~ latEnd_dd_ctd,
+                                        dist_agree & is.na(latEnd_dd_ctd) & !is.na(latEnd_dd_tow) ~ latEnd_dd_tow,
+                                        is.na(latEnd_dd_ctd) & !is.na(latEnd_dd_tow) ~ latEnd_dd_tow,
+                                        is.na(trawlDist_ctd) & !is.na(latEnd_dd_ctd) ~ latEnd_dd_tow,
+                                        dist_agree & !is.na(latEnd_dd_ctd) ~ latEnd_dd_ctd,
+                                        is.na(trawlDist_tow) & !is.na(latEnd_dd_ctd) ~ latEnd_dd_ctd,
+                                        .default = NA_real_),
+                  lonEnd_dd = case_when(bad_coords_tow ~ lonEnd_dd_ctd,
+                                        dist_agree & is.na(lonEnd_dd_ctd) & !is.na(lonEnd_dd_tow) ~ lonEnd_dd_tow,
+                                        is.na(lonEnd_dd_ctd) & !is.na(lonEnd_dd_tow) ~ lonEnd_dd_tow,
+                                        is.na(trawlDist_ctd) & !is.na(lonEnd_dd_ctd) ~ lonEnd_dd_tow,
+                                        dist_agree & !is.na(lonEnd_dd_ctd) ~ lonEnd_dd_ctd,
+                                        is.na(trawlDist_tow) & !is.na(lonEnd_dd_ctd) ~ lonEnd_dd_ctd,
+                                        .default = NA_real_),
+                  trawlDist_m = case_when(dist_agree ~ trawlDist_ctd,
+                                          is.na(trawlDist_ctd) & !is.na(trawlDist_tow) ~ trawlDist_tow,
+                                          is.na(trawlDist_tow) & !is.na(trawlDist_ctd) ~ trawlDist_ctd,
+                                          .default = NA_real_)) %>% 
+    dplyr::select(-matches("\\w+_dd_tow"), -matches("\\w+_dd_ctd"), -trawlDist_ctd,
+                  -trawlDist_tow, -bad_coords_tow, -coords_agree, -dist_agree) %>% 
+    dplyr::select(cno, station, towID, towDate, duration, ctdDateTime = towDateTime, matches("\\w+_dd"), trawlDist_m, everything()  )
+  
   
   # merge test
   ## test for cruise numbers (cno) in bioTab but not towTab
-  bioTab$cno[bioTab$cno %ni% towTab$cno]
-  if(length(bioTab$cno[bioTab$cno %ni% towTab$cno]) > 0) warning("Warning: There are cruises (cno) in bioTab not in towTab")
+  bioTab$cno[bioTab$cno %ni% towEnvTab$cno]
+  if(length(bioTab$cno[bioTab$cno %ni% towEnvTab$cno]) > 0) warning("Warning: There are cruises (cno) in bioTab not in towTab")
   ## test for stations in bioTab but not towTab
-  bioTab$station[bioTab$station %ni% towTab$station]
-  if(length(bioTab$station[bioTab$station %ni% towTab$station]) > 0 ) warning(paste0("Warning: There are stations in bioTab not present in towTab. \n Stations not in towTab are:",bioTab$station[bioTab$station %ni% towTab$station]))
+  bioTab$station[bioTab$station %ni% towEnvTab$station]
+  if(length(bioTab$station[bioTab$station %ni% towEnvTab$station]) > 0 ) warning(paste0("Warning: There are stations in bioTab not present in towTab. \n Stations not in towTab are:",bioTab$station[bioTab$station %ni% towTab$station]))
   ## test for towdates in bioTab but not towTab
-  bioTab$towdate[bioTab$towdate %ni% towTab$towdate]
-  if(length(bioTab$towdate[bioTab$towdate %ni% towTab$towdate]) > 0 ) warning(paste0("Warning: There are towdates present in bioTab not in towTab. \n Dates not present in towTab are:",bioTab$towdate[bioTab$towdate %ni% towTab$towdate]))
+  unique(bioTab$towdate[bioTab$towdate %ni% towEnvTab$towdate])
+  if(length(bioTab$towdate[bioTab$towdate %ni% towEnvTab$towdate]) > 0 ) warning(paste0("Warning: There are towdates present in bioTab not in towTab. \n Dates not present in towTab are:",unique(bioTab$towdate[bioTab$towdate %ni% towTab$towdate])))
   ## merge the bio and tow tabs by cno, station, and towdate
-  bioTowTab <- merge(bioTab, towTab, by = c("cno","station","towdate"))
+  bioTowTab <-left_join(bioTab, towEnvTab, by = c("cno","station","towDate"))
   saveRDS(bioTowTab, here('data/derived-data/bioTowTab.rds'))
   }
   bioTowTab = readRDS(here('data/derived-data/bioTowTab.rds'))
