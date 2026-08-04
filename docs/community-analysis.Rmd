@@ -158,19 +158,33 @@ We can also view the spatial extent of the trawl data to confirm that they are w
 ```{r trawl-lines}
 # create a metadata with the start and end of each tow
 bioTowMeta = bioTowTab %>% 
-  select(cno, towDate, station, towID, latStart_dd,lonStart_dd,latEnd_dd,lonEnd_dd) %>% 
+  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate) ,"-01" ), format = "%Y-%m-%d")) %>% 
+  select(towmonth, station, towID, latStart_dd,lonStart_dd,latEnd_dd,lonEnd_dd) %>% 
   distinct() %>% 
   dplyr::mutate(id = 1:n())
 
+# read in the bathymetry data
 bathPath = here("data/environmental/gebco_2026_n41.4_s39.8_w-74.3_e-71.4.nc")
 # turn this into a raster object
 bathRast = terra::rast(bathPath)
 bathDf = as.data.frame(bathRast, xy = TRUE)
 bathVars = names(bathDf)[3]
 threshold = 0
+## extract the depths for start and end from bathymetry data
+bioTowStart = vect(bioTowMeta, geom = c('lonStart_dd','latStart_dd'))
+bioTowEnd = vect(bioTowMeta, geom = c('lonEnd_dd','latEnd_dd'))
+bioTowMeta$startDepth_m = unlist(terra::extract(bathRast, y = bioTowStart)['elevation'])
+bioTowMeta$endDepth_m = unlist(terra::extract(bathRast, y = bioTowEnd)['elevation'])
+rm(bioTowStart);rm(bioTowEnd)
+
+bioTowMeta = bioTowMeta %>% 
+  select(id,towmonth, station, towID, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd, startDepth_m, endDepth_m) %>% 
+  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2)
 
 ggplot()+
-  geom_raster(data = bathDf,aes(x = x, y = y, fill = ifelse(.data[[bathVars]] > threshold, NA, .data[[bathVars]])), alpha = 1)+
+  geom_raster(data = bathDf, aes(x = x, y = y,
+                                 fill = ifelse(.data[[bathVars]] > threshold, NA,
+                                               .data[[bathVars]])), alpha = 1) +
   annotation_borders('world',
                      xlim = c(NYSbbox[1],NYSbbox[2]),
                      ylim = c(NYSbbox[3], NYSbbox[4]),
@@ -189,10 +203,7 @@ ggplot()+
 For each of these sampling dates we can extract the environmental data from the collected during the sampling.
 
 ```{r get-env}
-bioTowMonth = bioTowTab %>% 
-  mutate(towmonth = as.Date(paste0(lubridate::year(towDate),"-",lubridate::month(towDate),"-01"), format = "%Y-%m-%d")) %>%
-  select(towmonth) %>% 
-  distinct %>%
+bioTowMeta = bioTowMeta %>% 
   # join regional sst
   left_join(., readRDS(here('data/environmental/sst.rds')) %>% rename(towmonth = date)) %>% 
   # join regional chla
@@ -202,30 +213,63 @@ bioTowMonth = bioTowTab %>%
   # join the NAO
   left_join(., readRDS(here('data/environmental/nao.rds')) %>% select(towmonth = date, nao)) %>% 
   # join the AMO 
-  left_join(., readRDS(here('data/environmental/amo.rds')) %>% select(towmonth = date, amo = ssta), by = 'towmonth')
+  left_join(., readRDS(here('data/environmental/amo.rds')) %>% select(towmonth = date, amo = ssta), by = 'towmonth') %>% 
+  dplyr::mutate(id = 1:n(), .by = towmonth) %>% 
+  tidyr::unite('trawlID', towmonth, id, sep = "_", remove=FALSE) %>% 
+  dplyr::select(-id,  -towID, -startDepth_m, -endDepth_m, -lonStart_dd, -latStart_dd, -lonEnd_dd, -latEnd_dd) %>% 
+  dplyr::mutate(month = lubridate::month(towmonth), year = lubridate::year(towmonth)) %>% 
+  dplyr::select(trawlID, towmonth, year, month, station, meanDepth_m, sst, chl, zooc, nao, amo)
 
-## extract the depths for start and end from bathymetry data
-
-bioTowStart = vect(bioTowMeta, geom = c('lonStart_dd','latStart_dd'))
-bioTowEnd = vect(bioTowMeta, geom = c('lonEnd_dd','latEnd_dd'))
-bioTowMeta$startDepth_m = unlist(terra::extract(bathRast, y = bioTowStart)['elevation'])
-bioTowMeta$endDepth_m = unlist(terra::extract(bathRast, y = bioTowEnd)['elevation'])
-
-bioTowMeta = bioTowMeta %>% 
-  select(id, cno, towDate, station, towID, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd, startDepth_m, endDepth_m) %>% 
-  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2)
 ```
 
 ## Prepare data for modeling
 
 ```{r merge-all-data}
-bioEnv = bioTowMonth
-    
+
 bioData = bioTowTab %>% 
-  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate), "-01"), format = "%Y-%m-%d")) %>%
+  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate), "-01"), format = "%Y-%m-%d"),
+                trawlDist_km = trawlDist_m/1000) %>%
+  dplyr::select(towmonth, station, spn, weight, trawlDist_km ) %>% 
+  left_join(., bioTowMeta %>%
+              dplyr::select(trawlID, towmonth, station), by = c('towmonth', 'station'), relationship = "many-to-many") %>% 
   dplyr::summarise(abun = n(),
-                   biomass = sum(weight),.by = c(towmonth, spn, trawlDist_m))
+                   biomass = sum(weight),.by = c(trawlID, station, towmonth, spn, trawlDist_km)) %>% 
+  dplyr::mutate(abun_km = abun/trawlDist_km,
+                biomass_km = biomass/trawlDist_km) %>% 
+  left_join(., bioTowMeta, by = c('trawlID', 'towmonth', 'station'))%>% 
+  dplyr::select(trawlID, towmonth, year, month, station, meanDepth_m, sst, chl, zooc, nao, amo, spn, abun_km, biomass_km) 
 
 ```
 
+## Starting SDMs
 
+```{r abun-SDM}
+
+# this is for space. Add the midpoint of the stations here
+studyDesign = data.frame(matrix(NA, nrow(bioData), 3))
+studyDesign[,1] = bioData$station
+studyDesign[,2] = bioData$lon
+studyDesign[,3] = bioData$lat
+colnames(studyDesign)= c('station','year','month')
+studyDesign = apply(studyDesign,2,as.factor)
+rownames(studyDesign) <- bioData$trawlID
+
+rL = HmscRandomLevel(sData = studyDesign)
+rL$nfMin = 5
+rL$nfMax = 20
+
+# Y is the species abun/biomass data
+Y = bioData %>% 
+  select(trawlID, spn, abun_km) %>% 
+  pivot_wider(id_cols = trawlID, names_from = spn, values_from = abun_km, values_fill = 0) %>% 
+  column_to_rownames("trawlID") %>% 
+  as.matrix
+
+XData = bioData %>% 
+  select(trawlID, year, month, meanDepth_m, sst, chl, zooc, nao, amo)
+
+Xformula = ~trawlID + year + month + meanDepth + sst + chl + zooc + nao + amo
+
+
+
+```

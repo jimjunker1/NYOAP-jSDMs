@@ -17,7 +17,7 @@ library(readr)
 library(tibble)
 library(viridis)
 library(ncdf4)
-
+library(Hmsc)
 '%ni%' <- Negate('%in%')
 options(mc.cores = parallel::detectCores())
 rstan::rstan_options(auto_write = TRUE)
