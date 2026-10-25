@@ -118,14 +118,21 @@ get_trawl_data = function(conn = NULL, update = FALSE){
   ## tow and ctd merge test
   towEnvFile = merge(towFile, ctdTab, by = c('cno','station','towID','towDate','duration'), all = TRUE) %>% 
     dplyr::mutate(dist_agree = case_when(round(trawlDist_tow,3) == round(trawlDist_ctd,3) ~TRUE,
-                                         .default = FALSE))#,
-                  # coords_agree = case_when(latStart_dd_tow == latStart_dd_ctd &
-                  #                            lonStart_dd_tow == lonStart_dd_ctd &
-                  #                            latEnd_dd_tow == latEnd_dd_ctd &
-                  #                            lonEnd_dd_tow == lonEnd_dd_ctd ~ TRUE,
-                  #                          .default = FALSE))
-                                             # 'temp_c','sal_psu','do_mgL', 'ph'), all = TRUE)
-  
+                                         .default = FALSE),
+                  
+                  temp_c.x =  case_when(is.na(temp_c.x) ~ temp_c.y,
+                                        .default = temp_c.x),
+                  sal_psu.x = case_when(is.na(sal_psu.x) ~ sal_psu.y,
+                                        .default = sal_psu.x),
+                  do_mgL.x = case_when(is.na(do_mgL.x) ~ do_mgL.y,
+                                       .default = do_mgL.x),
+                  ph.x = case_when(is.na(ph.x) ~ ph.y,
+                                   .default = ph.x),
+                  trawlDist_tow = case_when(is.na(trawlDist_tow) ~ trawlDist_ctd,
+                                            .default = trawlDist_tow)) %>% 
+    dplyr::select(cno, station, towID, towDate, towDateTime, duration, latStart_dd, lonStart_dd, latEnd_dd, lonEnd_dd, temp_c = temp_c.x,
+                  sal_psu = sal_psu.x, do_mgL = do_mgL.x, ph = ph.x, trawlDist_tow)
+                
   
   towEnvTab = merge(towTab, ctdTab, by = c('cno','station','towID','towDate'), all = TRUE) %>% 
     dplyr::mutate(dist_agree = case_when(round(trawlDist_tow,4) == round(trawlDist_ctd,4) ~TRUE,
@@ -183,6 +190,10 @@ get_trawl_data = function(conn = NULL, update = FALSE){
   
   
   # merge test
+  ## test for cruise numbers (cno) in catchTab but not towTab
+  unique(catchTab$cno[catchTab$cno %ni% towEnvFile$cno])
+  if(length(catchTab$cno[catchTab$cno %ni% towEnvFile$cno]) > 0 ) warning('Warning: There are cruises (cno) in catchTab that are not in the towEnvFile')
+  unique(catchTab$cno[catchTab$cno %ni% towTab$cno])
   ## test for cruise numbers (cno) in bioTab but not towTab
   bioTab$cno[bioTab$cno %ni% towEnvTab$cno]
   if(length(bioTab$cno[bioTab$cno %ni% towEnvTab$cno]) > 0) warning("Warning: There are cruises (cno) in bioTab not in towTab")
@@ -193,12 +204,17 @@ get_trawl_data = function(conn = NULL, update = FALSE){
   unique(bioTab$towdate[bioTab$towdate %ni% towEnvTab$towdate])
   if(length(bioTab$towdate[bioTab$towdate %ni% towEnvTab$towdate]) > 0 ) warning(paste0("Warning: There are towdates present in bioTab not in towTab. \n Dates not present in towTab are:",unique(bioTab$towdate[bioTab$towdate %ni% towTab$towdate])))
   ## merge the bio and tow tabs by cno, station, and towdate
-  bioTowTab <-left_join(bioTab, towEnvTab, by = c("cno","station","towDate"))
+  bioTowTab <-left_join(catchTab, towEnvTab, by = c("cno","station"))
+  bioLenTowTab <- left_join(bioTab, towEnvTab, by = c("cno", "station", "towDate"))
   saveRDS(bioTowTab, here('data/derived-data/bioTowTab.rds'))
+  saveRDS(bioLenTowTab, here('data/derived-data/bioLenTowTab.rds'))
   }
   bioTowTab = readRDS(here('data/derived-data/bioTowTab.rds'))
    assign("bioTowTab", readRDS(here('data/derived-data/bioTowTab.rds')), envir = .GlobalEnv)
+  bioLenTowTab = readRDS(here('data/derived-data/bioLenTowTab.rds'))
+   assign('bioLenTowTab', readRDS(here('data/derived-data/bioLenTowTab.rds')), envir = .GlobalEnv)
    print("Trawl data imported")
+   
 
   
   #write the eml file to export 

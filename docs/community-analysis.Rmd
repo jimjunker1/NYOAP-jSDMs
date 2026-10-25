@@ -69,6 +69,9 @@ Introduction
 
 get_trawl_data(conn = conn, update = update_data)
 
+bioTowTab = bioTowTab %>% 
+  dplyr::filter(!(station == 'F19.3' & lubridate::year(towDate) == 2018))
+
 ```
 
 ## Data summaries:
@@ -91,8 +94,8 @@ While directly measured weights are present for most species, some of the data a
 
  
 ```{r censored-mass-ex}
-spList = bioTowTab %>% 
-  dplyr::filter(!when_all(is.na(tlength), is.na(flength), is.na(weight))) %>% 
+spList = bioLenTowTab %>% 
+  dplyr::filter(!when_all(is.na(weight), is.na(tlength), is.na(flength))) %>% 
   named_group_split(spn)
 
 spnLWList = spList %>% map(~.x %>% 
@@ -134,6 +137,7 @@ lmFiles= setNames(lmFiles, nm = lmNames)
 
 # debugonce(plot_LM_PPC)
 map2(lmFiles, spnLWList, ~plot_LM_PPC(model_path = .x, df = .y))
+rm(bioLenTowTab)
 
 ```
 
@@ -153,6 +157,178 @@ bioTowTab %>%
 ```
 
 </details>
+
+
+For each of these sampling dates we can extract the environmental data from the collected during the sampling.
+
+```{r get-env}
+# read in the bathymetry data
+bathPath = here("data/environmental/gebco_2026_n41.4_s39.8_w-74.3_e-71.4.nc")
+# turn this into a raster object
+bathRast = terra::rast(bathPath)
+bathDf = as.data.frame(bathRast, xy = TRUE)
+bathVars = names(bathDf)[3]
+threshold = 0
+
+bioTowCoords = bioTowTab %>%
+  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate) ,"-01" ), format = "%Y-%m-%d")) %>% 
+  # tidyr::unite('trawlID', station, towmonth,sep = "_", remove = FALSE) %>% 
+  dplyr::select(towmonth, station, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd)
+## extract the depths for start and end from bathymetry data
+bioTowStart = vect(bioTowCoords, geom = c('lonStart_dd','latStart_dd'), crs = "epsg:4326")
+bioTowEnd = vect(bioTowCoords, geom = c('lonEnd_dd','latEnd_dd'), crs = "epsg:4326")
+bioTowCoords$startDepth_m = unlist(terra::extract(bathRast, y = bioTowStart)['elevation'])
+bioTowCoords$endDepth_m = unlist(terra::extract(bathRast, y = bioTowEnd)['elevation'])
+# rm(bioTowStart);rm(bioTowEnd)
+
+bioTowCoords = bioTowCoords %>% 
+  select(towmonth, station, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd, startDepth_m, endDepth_m) %>% 
+  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2) %>% 
+  rowwise %>% 
+  dplyr::mutate(locLon = geosphere::midPoint(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd))[1],
+                locLat = geosphere::midPoint(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd))[2]) %>% 
+  dplyr::select(towmonth, station, meanDepth_m, locLon, locLat) %>% 
+  unique
+
+bioTowMeta = bioTowCoords %>% 
+  # join regional sst
+  left_join(., readRDS(here('data/environmental/sst.rds')) %>% rename(towmonth = date)) %>% 
+  # join regional chla
+  left_join(., readRDS(here('data/environmental/chl.rds')) %>% rename(towmonth = date)) %>% 
+  # join the regional zoo
+  left_join(., readRDS(here('data/environmental/zooc.rds')) %>% rename(towmonth = date)) %>% 
+  # join the NAO
+  left_join(., readRDS(here('data/environmental/nao.rds')) %>% select(towmonth = date, nao)) %>% 
+  # join the AMO 
+  left_join(., readRDS(here('data/environmental/amo.rds')) %>% select(towmonth = date, amo = ssta), by = 'towmonth') %>% 
+  dplyr::mutate(month = lubridate::month(towmonth), year = lubridate::year(towmonth)) %>% 
+  dplyr::select(towmonth, year, month, station, meanDepth_m, locLon, locLat, sst, chl, zooc, nao, amo)
+
+# clean the old objects
+rm(bioTowEnd)
+rm(bioTowStart)
+rm(bioTowCoords)
+rm(bathDf)
+rm(bathRast)
+rm(threshold)
+rm(bathPath)
+rm(bathVars)
+
+```
+
+## Prepare data for modeling
+
+```{r merge-all-data}
+
+bioData = bioTowTab %>% 
+  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate), "-01"), format = "%Y-%m-%d"),
+                trawlDist_km = trawlDist_m/1000,
+                month = lubridate::month(towDate),
+                year = lubridate::year(towDate)) %>%
+  dplyr::select(towmonth, station, spn, biomass_kg, trawlDist_km) %>%
+  dplyr::summarise(biomass_kg = sum(biomass_kg),.by = c(station, towmonth, spn, trawlDist_km)) %>% 
+  dplyr::mutate(biomass_kg_km = biomass_kg/trawlDist_km) %>% 
+  left_join(., bioTowMeta, by = c('towmonth', 'station'))%>% 
+  dplyr::select(towmonth, year, month, station, meanDepth_m, locLon, locLat, sst, chl, zooc, nao, amo, spn, biomass_kg_km) %>% 
+  dplyr::filter(!is.na(biomass_kg_km))
+  
+
+```
+
+## Starting SDMs
+
+```{r bio-SDM}
+# randomLevels
+## station
+## trawlID spatial coords
+## towmonth environmental
+# set the studyDesign matrix this is for space and time.
+studyDesign = bioData %>%
+  dplyr::select(station, year, month, locLon, locLat) %>% 
+  dplyr::filter(!duplicated(.)) %>% 
+  # column_to_rownames('station') %>% 
+  dplyr::mutate(across(everything(), as.factor)) %>% 
+  dplyr::select(station, year, month)
+
+spaceDesign = bioData %>% 
+  dplyr::select(station, locLon, locLat) %>% 
+  dplyr::mutate(across(c(locLon, locLat), ~round(.x, 5))) %>% 
+  dplyr::filter(!duplicated(.)) %>% 
+  dplyr::mutate(across(c(locLon, locLat), list(dup = ~duplicated(.x)))) %>% 
+  dplyr::mutate(locLon = case_when(locLon_dup ~ locLon + sample(c(1,-1), size = 1),
+                                   .default = locLon),
+                locLat = case_when(locLat_dup ~ locLat + sample(c(1,-1), size =1),
+                                   .default = locLat)) %>% 
+  dplyr::filter(!duplicated(.)) %>% 
+  column_to_rownames('station') %>% 
+  na.omit %>% 
+  select(-locLon_dup, -locLat_dup)
+
+years = bioData %>% 
+  dplyr::select(year) %>% 
+  distinct %>% 
+  unlist
+
+D.year = abs(outer(years, years, '-'))
+rownames(D.year) = as.character(years)
+colnames(D.year) = as.character(years)
+
+months = 1:12
+
+D.month = abs(outer(months, months, "-"))
+D.month = pmin(D.month, 12 - D.month)
+rownames(D.month) = as.character(months)
+colnames(D.month) = as.character(months)
+
+sRL = HmscRandomLevel(sData = spaceDesign, sMethod = 'Full', longlat = TRUE)
+
+yRL = HmscRandomLevel(distMat = D.year, sMethod = 'Full')
+
+mRL = HmscRandomLevel(distMat = D.month, sMethod = 'Full')
+
+sRL$nfMin = 5
+sRL$nfMax = 20
+
+# Y is the species abun/biomass data
+Y = bioData %>% 
+  select(station, spn, biomass_kg_km) %>% 
+  pivot_wider(id_cols = station, names_from = spn, values_from = biomass_kg_km, values_fill = 0) %>% 
+  column_to_rownames("station") %>% 
+  as.matrix
+
+xData = bioData %>% 
+  select(station, year, month, meanDepth_m, sst, chl, zooc, nao, amo) %>% 
+  distinct %>% 
+  select(-station)
+
+xformula = ~year + month+meanDepth_m + sst + chl + zooc + nao + amo
+
+m = Hmsc(Y = Y, XData=xData, XFormula = xformula,
+         distr = 'normal', studyDesign = studyDesign, ranLevels = list(station = sRL, year = yRL, month = mRL))
+
+```
+
+
+##Run the model
+
+```{r model-test-run}
+nChains = 2
+test = TRUE
+if(test){
+  thin = 1
+  samples = 100
+  transient = 50
+} else{
+    thin = 10
+  samples = 1000
+  transient = 500
+}
+verbose = 1
+fit = sampleMcmc(m, thin = thin, samples = samples, transient = transient, nChains = nChains,
+                 nParallel = nChains, verbose = verbose)
+```
+
+# Troubleshooting
 
 We can also view the spatial extent of the trawl data to confirm that they are within the bounds of the environmental variables.
 
@@ -180,7 +356,10 @@ bioTowMeta$endDepth_m = unlist(terra::extract(bathRast, y = bioTowEnd)['elevatio
 
 bioTowMeta = bioTowMeta %>% 
   select(id,towmonth, station, towID, lonStart_dd, latStart_dd, lonEnd_dd, latEnd_dd, startDepth_m, endDepth_m) %>% 
-  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2)
+  dplyr::mutate(meanDepth_m = (startDepth_m+endDepth_m)/2) %>% 
+  rowwise %>% 
+  dplyr::mutate(locLon = geosphere::midPoint(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd))[1],
+                locLat = geosphere::midPoint(c(lonStart_dd,latStart_dd), c(lonEnd_dd, latEnd_dd))[2])
 
 ggplot()+
   geom_raster(data = bathDf, aes(x = x, y = y,
@@ -205,28 +384,28 @@ ggplot()+
 ```{r get-polygons}
 polys = vect(here('data/NewStrataFromMark.shp'))
 polys_p = project(polys, "epsg:4326")
-polys_r = rasterize()
+# polys_r = rasterize()
 
-# polys_p$
-ggplot()+
-  geom_raster(data = bathDf, aes(x = x, y = y,
-                                 fill = ifelse(.data[[bathVars]] > threshold, NA,
-                                               .data[[bathVars]])), alpha = 1) +
-  geom_sf(data = polys_p, aes(x = x, y = y))
-  annotation_borders('world',
-                     xlim = c(NYSbbox[1],NYSbbox[2]),
-                     ylim = c(NYSbbox[3], NYSbbox[4]),
-                     fill = 'grey')+
-  annotate(geom = 'rect', xmin = NYSbbox[1], xmax = NYSbbox[2],
-                    ymin = NYSbbox[3], ymax = NYSbbox[4], fill = NA, color = 'black')+
-  
-  coord_sf(crs = 4326,
-           xlim = c(NYSbbox[1],NYSbbox[2]),
-           ylim = c(NYSbbox[3], NYSbbox[4]))+
-  # geom_point(data = bioTowTab, aes(x = lonStart_dd, latStart_dd))+
-  geom_segment(data = bioTowMeta, aes(x = lonStart_dd, y = latStart_dd, xend = lonEnd_dd, yend = latEnd_dd, group = id))+
-  labs(title = "NYS study region", x = 'Longitude', y = 'Latitude')+
-  theme(legend.position = 'none')
+# # polys_p$
+# ggplot()+
+#   geom_raster(data = bathDf, aes(x = x, y = y,
+#                                  fill = ifelse(.data[[bathVars]] > threshold, NA,
+#                                                .data[[bathVars]])), alpha = 1) +
+#   geom_sf(data = polys_p, aes(x = x, y = y))
+#   annotation_borders('world',
+#                      xlim = c(NYSbbox[1],NYSbbox[2]),
+#                      ylim = c(NYSbbox[3], NYSbbox[4]),
+#                      fill = 'grey')+
+#   annotate(geom = 'rect', xmin = NYSbbox[1], xmax = NYSbbox[2],
+#                     ymin = NYSbbox[3], ymax = NYSbbox[4], fill = NA, color = 'black')+
+#   
+#   coord_sf(crs = 4326,
+#            xlim = c(NYSbbox[1],NYSbbox[2]),
+#            ylim = c(NYSbbox[3], NYSbbox[4]))+
+#   # geom_point(data = bioTowTab, aes(x = lonStart_dd, latStart_dd))+
+#   geom_segment(data = bioTowMeta, aes(x = lonStart_dd, y = latStart_dd, xend = lonEnd_dd, yend = latEnd_dd, group = id))+
+#   labs(title = "NYS study region", x = 'Longitude', y = 'Latitude')+
+#   theme(legend.position = 'none')
 ```
 
 ```{r id-errant-trawls}
@@ -262,81 +441,5 @@ trawls_intersect = terra::extract(errant_poly, bioTowStart)
 errant_vec = sum(!is.na(trawls_intersect[,"id.x"]))
 
 errant_trawls = bioTowMeta[errant_vec,]
-
-```
-
-
-
-For each of these sampling dates we can extract the environmental data from the collected during the sampling.
-
-```{r get-env}
-bioTowMeta = bioTowMeta %>% 
-  # join regional sst
-  left_join(., readRDS(here('data/environmental/sst.rds')) %>% rename(towmonth = date)) %>% 
-  # join regional chla
-  left_join(., readRDS(here('data/environmental/chl.rds')) %>% rename(towmonth = date)) %>% 
-  # join the regional zoo
-  left_join(., readRDS(here('data/environmental/zooc.rds')) %>% rename(towmonth = date)) %>% 
-  # join the NAO
-  left_join(., readRDS(here('data/environmental/nao.rds')) %>% select(towmonth = date, nao)) %>% 
-  # join the AMO 
-  left_join(., readRDS(here('data/environmental/amo.rds')) %>% select(towmonth = date, amo = ssta), by = 'towmonth') %>% 
-  dplyr::mutate(id = 1:n(), .by = towmonth) %>% 
-  tidyr::unite('trawlID', towmonth, id, sep = "_", remove=FALSE) %>% 
-  dplyr::select(-id,  -towID, -startDepth_m, -endDepth_m, -lonStart_dd, -latStart_dd, -lonEnd_dd, -latEnd_dd) %>% 
-  dplyr::mutate(month = lubridate::month(towmonth), year = lubridate::year(towmonth)) %>% 
-  dplyr::select(trawlID, towmonth, year, month, station, meanDepth_m, sst, chl, zooc, nao, amo)
-
-```
-
-## Prepare data for modeling
-
-```{r merge-all-data}
-
-bioData = bioTowTab %>% 
-  dplyr::mutate(towmonth = as.Date( paste0( lubridate::year(towDate), "-", lubridate::month(towDate), "-01"), format = "%Y-%m-%d"),
-                trawlDist_km = trawlDist_m/1000) %>%
-  dplyr::select(towmonth, station, spn, weight, trawlDist_km ) %>% 
-  left_join(., bioTowMeta %>%
-              dplyr::select(trawlID, towmonth, station), by = c('towmonth', 'station'), relationship = "many-to-many") %>% 
-  dplyr::summarise(abun = n(),
-                   biomass = sum(weight),.by = c(trawlID, station, towmonth, spn, trawlDist_km)) %>% 
-  dplyr::mutate(abun_km = abun/trawlDist_km,
-                biomass_km = biomass/trawlDist_km) %>% 
-  left_join(., bioTowMeta, by = c('trawlID', 'towmonth', 'station'))%>% 
-  dplyr::select(trawlID, towmonth, year, month, station, meanDepth_m, sst, chl, zooc, nao, amo, spn, abun_km, biomass_km) 
-
-```
-
-## Starting SDMs
-
-```{r abun-SDM}
-
-# this is for space. Add the midpoint of the stations here
-studyDesign = data.frame(matrix(NA, nrow(bioData), 3))
-studyDesign[,1] = bioData$station
-studyDesign[,2] = bioData$lon
-studyDesign[,3] = bioData$lat
-colnames(studyDesign)= c('station','year','month')
-studyDesign = apply(studyDesign,2,as.factor)
-rownames(studyDesign) <- bioData$trawlID
-
-rL = HmscRandomLevel(sData = studyDesign)
-rL$nfMin = 5
-rL$nfMax = 20
-
-# Y is the species abun/biomass data
-Y = bioData %>% 
-  select(trawlID, spn, abun_km) %>% 
-  pivot_wider(id_cols = trawlID, names_from = spn, values_from = abun_km, values_fill = 0) %>% 
-  column_to_rownames("trawlID") %>% 
-  as.matrix
-
-XData = bioData %>% 
-  select(trawlID, year, month, meanDepth_m, sst, chl, zooc, nao, amo)
-
-Xformula = ~trawlID + year + month + meanDepth + sst + chl + zooc + nao + amo
-
-
 
 ```
